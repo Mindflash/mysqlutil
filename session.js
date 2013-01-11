@@ -40,7 +40,8 @@ module.exports = function (conn) {
 		items = _.isArray(items) ? items : [items];
 		options = _.defaults(options || {}, {
 			insertMode:obj.defaultInsertMode,
-			enforceRules:true
+			enforceRules:true,
+			ignore:false
 		});
 
 		var stack = [];
@@ -56,14 +57,14 @@ module.exports = function (conn) {
 									if (err) return insertCb(err);
 									stack.push(result);
 									forEachCb();
-								}, item);
+								}, item, options);
 							});
 						} else {
 							insertItem(function insertItemCb(err, result) {
 								if (err) return insertCb(err);
 								stack.push(result);
 								forEachCb();
-							}, item);
+							}, item, options);
 						}
 					},
 					function foreachFinalCb(err) {
@@ -76,9 +77,10 @@ module.exports = function (conn) {
 			}
 		);
 
-		function insertItem(insertItemCb, item) {
+		function insertItem(insertItemCb, item, options) {
 			var sql = [];
-			sql.push('INSERT INTO ', tableName, ' (');
+			sql.push('INSERT ',(options.ignore ? 'IGNORE ' : ' '),'INTO ', tableName, ' (');
+
 			var fields = [];
 			var values = [];
 			var expressions = [];
