@@ -36,50 +36,91 @@ module.exports = function (conn) {
 		});
 	}
 
+	var hiloRef = hilo();
+
+	function bulkInsert(tableName, items, insertCb, options) {
+		async.forEach(items,
+			function (item, forEachCb) {
+				hiloRef.computeNextKey(obj, function hiloCb(nextKey) {
+					item.$insertId = item[hiloRef.keyName] = nextKey;
+					forEachCb();
+				});
+			},
+			function insertItems(err) {
+				if (err) return insertCb(err);
+				var sql = [];
+				sql.push('INSERT ', (options.ignore ? 'IGNORE ' : ' '), 'INTO ', tableName, ' ');
+
+				// use the 1st item to get our fields
+				var fields = _.filter(_.keys(items[0]), function (key) {
+					return key.charAt(0) !== '$';
+				});
+
+				sql.push('(', fields.join(','), ') VALUES ? ');
+
+				var rows = []; // values needs to be a 2-d array for bulk INSERT
+				_.each(items, function (item) {
+					// TODO
+//				if (options.enforceRules) {
+//					_.each(obj.insertRules, function (rule) {
+//						rule(item, fields, _.values(item), expressions, tableName); // created, modified set to now etc
+//					});
+//				}
+					rows.push(
+						_.map(fields, function (field) {
+							return item[field];
+						})
+					);
+				});
+
+				query(sql.join(''), rows, function queryCb(err, result) {
+//				if (result) //Return the new id in a consistent way no matter the insertMode
+//					result.insertId = item.$insertId || result.insertId;
+					insertCb(err, result);
+				});
+			}
+		);
+	}
+
 	function insert(tableName, items, insertCb, options) {
 		items = _.isArray(items) ? items : [items];
 		options = _.defaults(options || {}, {
-			insertMode:obj.defaultInsertMode,
-			enforceRules:true,
-			ignore:false
+			insertMode: obj.defaultInsertMode,
+			enforceRules: true,
+			ignore: false
 		});
 
+//		if (items.length > 1)
+//			return bulkInsert(tableName, items, insertCb, options);
+
 		var stack = [];
-		async.series([
-			function (seriesCb) {
-				async.forEachLimit(items, concurrencyLimit,
-					function (item, forEachCb) {
-						if (options.insertMode === insertModes.hilo) {
-							var hiloRef = hilo();
-							hiloRef.computeNextKey(obj, function hiloCb(nextKey) {
-								item.$insertId = item[hiloRef.keyName] = nextKey;
-								insertItem(function insertItemCb(err, result) {
-									if (err) return insertCb(err);
-									stack.push(result);
-									forEachCb();
-								}, item, options);
-							});
-						} else {
-							insertItem(function insertItemCb(err, result) {
-								if (err) return insertCb(err);
-								stack.push(result);
-								forEachCb();
-							}, item, options);
-						}
-					},
-					function foreachFinalCb(err) {
-						seriesCb();
-					}
-				);
-			}],
-			function seriesFinalCb(err,result) {
-				insertCb(null, stack.length > 1 ? stack : stack[0]);
+		async.forEachLimit(items, concurrencyLimit,
+			function (item, forEachCb) {
+				if (options.insertMode === insertModes.hilo) {
+					hiloRef.computeNextKey(obj, function hiloCb(nextKey) {
+						item.$insertId = item[hiloRef.keyName] = nextKey;
+						insertItem(function insertItemCb(err, result) {
+							if (err) return insertCb(err);
+							stack.push(result);
+							forEachCb();
+						}, item, options);
+					});
+				} else {
+					insertItem(function insertItemCb(err, result) {
+						if (err) return insertCb(err);
+						stack.push(result);
+						forEachCb();
+					}, item, options);
+				}
+			},
+			function foreachFinalCb(err) {
+				insertCb(err, stack.length > 1 ? stack : stack[0]);
 			}
 		);
 
 		function insertItem(insertItemCb, item, options) {
 			var sql = [];
-			sql.push('INSERT ',(options.ignore ? 'IGNORE ' : ' '),'INTO ', tableName, ' (');
+			sql.push('INSERT ', (options.ignore ? 'IGNORE ' : ' '), 'INTO ', tableName, ' (');
 
 			var fields = [];
 			var values = [];
@@ -113,62 +154,59 @@ module.exports = function (conn) {
 	function update(tableName, items, updateCb, options) {
 		items = _.isArray(items) ? items : [items];
 		options = _.defaults(options || {}, {
-			enforceRules:true
+			enforceRules: true
 		});
 
 		var stack = [];
-		async.series([
-			function (seriesCb) {
-				async.forEachLimit(items, concurrencyLimit,
-					function (item, forEachCb) {
-						if (!item.$key && !item.$where)
-							return updateCb(new Error("either $key or $where is required on each item"));
 
-						var sql = [];
-						sql.push('UPDATE ', tableName, ' SET ');
-						var fields = [];
-						var values = [];
-						var expressions = [];
+		async.forEachLimit(items, concurrencyLimit,
+			function (item, forEachCb) {
+				if (!item.$key && !item.$where)
+					return updateCb(new Error("either $key or $where is required on each item"));
 
-						_.each(item, function (value, field) {
-							if (field.charAt(0) !== '$') {
-								fields.push(field);
-								expressions.push('?');
-								values.push(value);
-							}
-						});
+				var sql = [];
+				sql.push('UPDATE ', tableName, ' SET ');
+				var fields = [];
+				var values = [];
+				var expressions = [];
 
-						if (options.enforceRules) {
-							_.each(obj.updateRules, function (rule) {
-								rule(item, fields, values, expressions, tableName);
-							});
-						}
+				_.each(item, function (value, field) {
+					if (field.charAt(0) !== '$') {
+						fields.push(field);
+						expressions.push('?');
+						values.push(value);
+					}
+				});
 
-						for (var i = fields.length; i--;)
-							fields[i] += '=' + expressions[i];
+				if (options.enforceRules) {
+					_.each(obj.updateRules, function (rule) {
+						rule(item, fields, values, expressions, tableName);
+					});
+				}
 
-						if (!item.$where) {
-							item.$where = obj.defaultKeyName + '=?';
-							values.push(item.$key);
-						} else if (_.isArray(item.$where)) {
-							values = values.concat(_.rest(item.$where));
-							item.$where = item.$where[0];
-						}
+				for (var i = fields.length; i--;)
+					fields[i] += '=' + expressions[i];
 
-						sql.push(fields.join(','), ' WHERE ', item.$where, ';');
+				if (!item.$where) {
+					item.$where = obj.defaultKeyName + '=?';
+					values.push(item.$key);
+				} else if (_.isArray(item.$where)) {
+					values = values.concat(_.rest(item.$where));
+					item.$where = item.$where[0];
+				}
 
-						sql = sql.join('');
-						query(sql, values, function queryCb(err, result) {
-							if (err) updateCb(err);
-							stack.push(result);
-							forEachCb();
-						});
-					},
-					seriesCb);
-			}],
-			function finalSeriesCb(err) {
+				sql.push(fields.join(','), ' WHERE ', item.$where, ';');
+
+				sql = sql.join('');
+				query(sql, values, function queryCb(err, result) {
+					if (err) updateCb(err);
+					stack.push(result);
+					forEachCb();
+				});
+			},
+			function finalForeachCb(err) {
 				if (err) updateCb(err);
-				updateCb(null, stack.length > 1 ? stack : stack[0]);
+				updateCb(err, stack.length > 1 ? stack : stack[0]);
 			}
 		);
 	}
@@ -179,7 +217,7 @@ module.exports = function (conn) {
 			updateResults = _.isArray(updateResults) ? updateResults : [updateResults];
 			// throw an index onto each updateResult so we can trace it back to its item
 			var tmp = [];
-			_.each(updateResults, function(updateResult, index, list) {
+			_.each(updateResults, function (updateResult, index, list) {
 				updateResult.$index = index;
 				tmp[index] = updateResult;
 			});
@@ -219,15 +257,18 @@ module.exports = function (conn) {
 		var lastBatchID = -1;
 		var deferredCallbacks = [];
 		var queryPending = false;
+		var batchSize = 10100;
 
 		return {
-			keyName:'id',
-			type:'hilo',
-			computedKey:true,
-			computeNextKey:function computeNextKey(mysql, cb) {
+			keyName: 'id',
+			type: 'hilo',
+			computedKey: true,
+			computeNextKey: function computeNextKey(mysql, cb) {
 				if (nextID <= lastBatchID) {
 					log('*** Handing out id ' + nextID);
-					return cb(nextID++);
+					var currentID = nextID;
+					nextID++;
+					return cb(currentID);
 				}
 
 				deferredCallbacks.push(cb);
@@ -235,9 +276,9 @@ module.exports = function (conn) {
 				log('*** deferring while waiting for a new ID', deferredCallbacks.length, queryPending);
 				if (!queryPending) {
 					queryPending = true;
-					mysql.queryOne('call nextHiLo(?)', [100], function (err, result) {
+					mysql.queryOne('call nextHiLo(?)', [batchSize], function (err, result) {
 						if (err) return cb(err);
-						result = result[0][0];		//Derp
+						result = result[0][0]; // \[0]_[0]/
 						log('*** New id range', result);
 
 						nextID = result.start;
@@ -258,46 +299,46 @@ module.exports = function (conn) {
 	}
 
 	function disableKeyChecks(cb) {
-		query("SET unique_checks=0;", null, function(err,result) {
+		query("SET unique_checks=0;", null, function (err, result) {
 			query("SET foreign_key_checks=0;", cb)
 		});
 	}
 
 	function enableKeyChecks(cb) {
-		query("SET unique_checks=1;", null, function(err,result) {
+		query("SET unique_checks=1;", null, function (err, result) {
 			query("SET foreign_key_checks=1;", cb)
 		});
 	}
 
 	var obj = _.defaults({
-		defaultInsertMode:insertModes.hilo,
-		defaultKeyName:'id',
+		defaultInsertMode: insertModes.hilo,
+		defaultKeyName: 'id',
 
-		insertRules:[],
-		updateRules:[],
+		insertRules: [],
+		updateRules: [],
 
-		query:function (sql, queryParams, cb) {
+		query: function (sql, queryParams, cb) {
 			query(sql, queryParams, cb);
 		},
-		queryOne:function (sql, queryParams, cb) {
+		queryOne: function (sql, queryParams, cb) {
 			query(sql, queryParams, function (err, result) {
 				cb(err, (result && result.length === 1) ? result[0] : result)
 			});
 		},
-		insert:insert,
-		update:update,
-		upsert:upsert,
+		insert: insert,
+		update: update,
+		upsert: upsert,
 
-		startTransaction:transactions.startTransaction,
-		commit:transactions.commit,
-		rollback:transactions.rollback,
+		startTransaction: transactions.startTransaction,
+		commit: transactions.commit,
+		rollback: transactions.rollback,
 
-		disableKeyChecks:disableKeyChecks,
-		enableKeyChecks:enableKeyChecks,
+		disableKeyChecks: disableKeyChecks,
+		enableKeyChecks: enableKeyChecks,
 
-		disconnect:disconnect,
+		disconnect: disconnect,
 
-		logging:false
+		logging: false
 	}, conn);
 	return obj;
 };
