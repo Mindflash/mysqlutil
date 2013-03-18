@@ -1,8 +1,9 @@
 "use strict";
 var _ = require('underscore');
 
-module.exports.buildColsValues = function(params) {
-	var sql = [];
+module.exports = function(params, cb) {
+	var sql = ['INSERT INTO ', params.tableName, ' ('];
+
 	var fields = [];
 	var values = [];
 	var expressions = [];
@@ -15,6 +16,14 @@ module.exports.buildColsValues = function(params) {
 		}
 	});
 
+	if (params.insertRules) {
+		_.each(params.insertRules, function (rule) {
+			rule(params.item, fields, values, expressions, params.tableName);
+		});
+	}
+
+	sql.push(fields.join(','), ') VALUES (', expressions.join(','), ') ON DUPLICATE KEY UPDATE ');
+
 	if (params.updateRules) {
 		_.each(params.updateRules, function (rule) {
 			rule(params.item, fields, values, expressions, params.tableName);
@@ -24,5 +33,10 @@ module.exports.buildColsValues = function(params) {
 	for (var i = fields.length; i--;)
 		fields[i] += '=' + expressions[i];
 
-	return fields.join(',');
+	sql.push(fields.join(','));
+
+	cb(null, {
+		sql: sql.join(''),
+		values: values.concat(values)
+	});
 };

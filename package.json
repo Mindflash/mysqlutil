@@ -7,7 +7,7 @@
 		"url": "https://github.com/Mindflash/mysqlutil.git"
 	},
 	"keywords": ["mysql"],
-	"version": "0.0.97",
+	"version": "0.0.98",
 	"bugs": {
 		"url": "https://github.com/Mindflash/mysqlutil/issues"
 	},
@@ -19,7 +19,7 @@
 		"type": "MIT"
 	},
 	"scripts": {
-		"test": "tap tests/*.js"
+		"test": "tap tests/*.js tap tests/builders/*.js"
 	},
 	"main": "index.js",
 	"dependencies": {

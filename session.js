@@ -2,102 +2,95 @@
 var _ = require('underscore');
 var async = require('async');
 var util = require('util');
-var fs = require('fs');
-var insertModes = require('./util/insertModes.js');
-var updateHelper = require('./util/updateHelper.js');
+var mysql = require('mysql');
 
+var insertModes = require('./util/insertModes.js');
+var updateBuilder = require('./sqlBuilders/updateBuilder.js');
+var insertBuilder = require('./sqlBuilders/insertBuilder.js');
+var bulkInsertBuilder = require('./sqlBuilders/bulkInsertBuilder.js');
+var upsertBuilder = require('./sqlBuilders/upsertBuilder.js');
+var uuidHelper = require('./util/uuidHelper.js');
+
+var _connectionParams = {};
 var concurrencyLimit = 10;
 var bulkInsertBatchSize = 1000;
 var hiLoBatchSize = 101;
 var minBatchCount = 100;
 
-module.exports = function (conn) {
-	var transactions = require('./util/transactions.js')(conn);
+module.exports = function (connectionParams) {
+	var pool = mysql.createPool(connectionParams);
+	var openTransaction = false;
 	var hiloRef = hilo();
 
 	function log() {
 		if (!obj.logging)
 			return;
-		fs.writeSync(1, util.inspect(arguments) + '\n');
+		util.debug(util.inspect(arguments));
 	}
 
 	function error() {
-		fs.writeSync(2, util.inspect(arguments) + '\n');
+		util.error(util.inspect(arguments));
 	}
 
 	function query(sql, queryParams, queryCb) {
+		queryCb = queryCb || function() {};
 		log(sql, queryParams);
-		conn.query(sql, queryParams, function (err, result) {
-			if (err) {
-				err.result = result;
-				err.sql = sql;
-				err.queryParams = queryParams;
-			}
 
-			if (result && !util.isArray(result) && result.columnLength === 0)
-				result = [];
+		pool.getConnection(function(err, conn) {
+			if(err) return queryCb(err);
+			if(!conn.connId)
+				conn.connId = uuidHelper.generateUUID();
 
-			log(err, result);
-			queryCb(err, result);
+			conn.query(sql, queryParams, function (err, result) {
+				if (err) {
+					err.result = result;
+					err.sql = sql;
+					err.queryParams = queryParams;
+				}
+
+				if (result && !util.isArray(result) && result.columnLength === 0)
+					result = [];
+
+				log(err, result);
+				conn.end();
+
+				queryCb(err, result);
+			});
 		});
 	}
 
 	function bulkInsert(tableName, items, insertCb, options) {
 		async.forEach(items,
-			function (item, forEachCb) {
+			function (item, eachCb) {
 				hiloRef.computeNextKey(obj, function hiloCb(nextKey) {
 					item.$insertId = item[hiloRef.keyName] = nextKey;
-					forEachCb();
+					eachCb();
 				});
 			},
 			function insertItems(err) {
 				if (err) return insertCb(err);
-				var sql = [];
-				if (options.replace) {
-					sql.push('REPLACE ');
-				} else {
-					sql.push('INSERT ', (options.ignore ? 'IGNORE ' : ' '));
-				}
-				sql.push('INTO ', tableName, ' ');
+				bulkInsertBuilder({
+					replace:options.replace,
+					ignore:options.ignore,
+					tableName:tableName,
+					items: items,
+					rules: options.enforceRules ? obj.insertRules : null
+				}, function(err, insertInfo) {
+					if(err) return insertCb(err);
 
-				// use the 1st item to get our fields
-				var fields = _.filter(_.keys(items[0]), function (key) {
-					return key.charAt(0) !== '$';
-				});
-
-				if (options.enforceRules) {
-					_.each(obj.insertRules, function (rule) {
-						rule(null, fields, null, null, tableName);
-					});
-				}
-
-				sql.push('(', fields.join(','), ') VALUES ? ');
-
-				var rows = []; // values needs to be a 2-d array for bulk INSERT
-				_.each(items, function (item) {
-					if (options.enforceRules) {
-						_.each(obj.insertRules, function (rule) {
-							rule(item, null, null, null, tableName);
+					query(insertInfo.sql, insertInfo.values, function queryCb(err, result) {
+						// $insertId -> insertId
+						items = _.map(items, function (item) {
+							if(item.$insertId) {
+								item.insertId = item.$insertId;
+								delete item.$insertId;
+							}
+							return item;
 						});
-					}
-					rows.push(
-						_.map(fields, function (field) {
-							return item[field];
-						})
-					);
+						insertCb(err, items);
+					});
 				});
 
-				query(sql.join(''), [rows], function queryCb(err, result) {
-					// $insertId -> insertId
-					items = _.map(items, function (item) {
-						if(item.$insertId) {
-							item.insertId = item.$insertId;
-							delete item.$insertId;
-						}
-						return item;
-					});
-					insertCb(err, items);
-				});
 			}
 		);
 	}
@@ -108,14 +101,10 @@ module.exports = function (conn) {
 			insertMode: obj.defaultInsertMode,
 			enforceRules: true,
 			ignore: false,
-			replace: false,
-			upsert: false
+			replace: false
 		});
 
-		if (items.length > 1 && options.upsert)
-			return insertCb(new Error('Bulk upsert is not supported'));
-
-		if (items.length > 1) {
+		if (items.length > 1 && !options.upsert) {
 			var idx = 0;
 			var insertedItems = [];
 			async.whilst(
@@ -141,7 +130,6 @@ module.exports = function (conn) {
 		var item = items[0];
 		async.series([
 			function (sCb) {
-				if(options.insertMode != insertModes.hilo) return sCb();
 				hiloRef.computeNextKey(obj, function hiloCb(nextKey) {
 					item.$insertId = item[hiloRef.keyName] = nextKey;
 					sCb();
@@ -151,58 +139,24 @@ module.exports = function (conn) {
 				insertItem(sCb, item, options);
 			}
 		], function (err, res) {
-			if(item.$insertId) {
-				item.insertId = item.$insertId;
-				delete item.$insertId;
-			}
+			item.insertId = item.$insertId;
+			delete item.$insertId;
 			insertCb(err, item);
 		});
 
 		function insertItem(insertItemCb, item, options) {
-			var sql = [];
-			if (options.replace) {
-				sql.push('REPLACE ');
-			} else {
-				sql.push('INSERT ', (options.ignore ? 'IGNORE ' : ' '));
-			}
-			sql.push('INTO ', tableName, ' (');
+			insertBuilder({
+				item:item,
+				tableName:tableName,
+				rules: options.enforceRules ? obj.insertRules : null,
+				replace: options.replace,
+				ignore: options.ignore
+			}, function(err, insertInfo) {
+				if(err) return insertItemCb(err);
 
-			var fields = [];
-			var values = [];
-			var expressions = [];
-
-			_.each(item, function (value, field) {
-				if (field.charAt(0) !== '$') {
-					fields.push(field);
-					expressions.push('?');
-					values.push(value);
-				}
-			});
-
-			if (options.enforceRules) {
-				_.each(obj.insertRules, function (rule) {
-					rule(item, fields, values, expressions, tableName);
+				query(insertInfo.sql, insertInfo.values, function queryCb(err, result) {
+					insertItemCb(err, result);
 				});
-			}
-
-			sql.push(fields.join(','), ') VALUES (', expressions.join(','), ')');
-
-			if(options.upsert) {
-				sql.push(' ON DUPLICATE KEY UPDATE ');
-				var fields = updateHelper.buildColsValues({
-					item: item,
-					tableName: tableName,
-					updateRules: options.enforceRules ? obj.updateRules : null
-				});
-				sql.push(fields);
-				expressions = expressions.concat(expressions);
-				values = values.concat(values);
-			}
-
-			sql = sql.join('');
-
-			query(sql, values, function queryCb(err, result) {
-				insertItemCb(err, result);
 			});
 		}
 	}
@@ -215,90 +169,76 @@ module.exports = function (conn) {
 
 		var stack = [];
 
-		async.forEachLimit(items, concurrencyLimit,
-			function (item, forEachCb) {
-				if (!item.$key && !item.$where)
-					return updateCb(new Error("either $key or $where is required on each item"));
-
-				var sql = [];
-				sql.push('UPDATE ', tableName, ' SET ');
-
-				var fields = updateHelper.buildColsValues({
+		async.eachLimit(items, concurrencyLimit,
+			function (item, eachCb) {
+				updateBuilder({
 					item: item,
 					tableName: tableName,
-					updateRules: options.enforceRules ? obj.updateRules : null
-				});
-				sql.push(fields);
+					rules: options.enforceRules ? obj.updateRules : null,
+					defaultKeyName: obj.defaultKeyName
+				}, function(err, updateInfo) {
+					if(err) return updateCb(err);
 
-				var values = [];
-				_.each(item, function (value, field) {
-					if (field.charAt(0) !== '$')
-						values.push(value);
-				});
-
-				if (!item.$where) {
-					item.$where = obj.defaultKeyName + '=?';
-					values.push(item.$key);
-				} else if (_.isArray(item.$where)) {
-					values = values.concat(_.rest(item.$where));
-					item.$where = item.$where[0];
-				}
-				sql.push(' WHERE ', item.$where, ';');
-
-				sql = sql.join('');
-
-				query(sql, values, function queryCb(err, result) {
-					if (err) updateCb(err);
-					stack.push(result);
-					forEachCb();
+					query(updateInfo.sql, updateInfo.values, function queryCb(err, result) {
+						if (err) updateCb(err);
+						stack.push(result);
+						eachCb();
+					});
 				});
 			},
-			function finalForeachCb(err) {
+			function finalEachCb(err) {
 				if (err) updateCb(err);
 				updateCb(err, stack.length > 1 ? stack : stack[0]);
 			}
 		);
 	}
 
-	function upsert(tableName, items, upsertCb, options) {
-		update(tableName, items, function updateCb(err, updateResults) {
-			if (err) return upsertCb(err);
-			updateResults = _.isArray(updateResults) ? updateResults : [updateResults];
-			// throw an index onto each updateResult so we can trace it back to its item
-			var tmp = [];
-			_.each(updateResults, function (updateResult, index, list) {
-				updateResult.$index = index;
-				tmp[index] = updateResult;
-			});
-			updateResults = tmp;
-			var stack = [];
-
-			async.forEach(updateResults,
-				function (updateResult, forEachCb) {
-					if (updateResult.affectedRows === 0) {
-						insert(tableName, items[updateResult.$index], function insertCb(err, result) {
-							if (err) return upsertCb(err);
-							stack.push(updateResult);
-							forEachCb();
-						}, options);
-					}
-					else {
-						stack.push(updateResult);
-						forEachCb();
-					}
-				},
-				function forEachCompleteCb(err) {
-					if (err) return upsertCb(err);
-					upsertCb(null, stack.length > 1 ? stack : stack[0]);
-				}
-			);
-		}, options);
-	}
-
-	function disconnect(cb) {
-		conn.end(function (err) {
-			if (cb) cb(err);
+	function upsert(tableName, items, insertCb, options) {
+		items = _.isArray(items) ? items : [items];
+		options = _.defaults(options || {}, {
+			insertMode: obj.defaultInsertMode,
+			enforceRules: true
 		});
+
+		var stack = [];
+		async.eachLimit(items, concurrencyLimit,
+			function (item, eachCb) {
+				if (options.insertMode === insertModes.hilo) {
+					hiloRef.computeNextKey(obj, function hiloCb(nextKey) {
+						item.$insertId = item[hiloRef.keyName] = nextKey;
+						upsertItem(function upsertItemCb(err, result) {
+							if (err) return insertCb(err);
+							result.insertId = item.$insertId;
+							stack.push(result);
+							eachCb();
+						}, item, options);
+					});
+				} else {
+
+					upsertItem(function upsertItemCb(err, result) {
+						if (err) return insertCb(err);
+						stack.push(result);
+						eachCb();
+					}, item, options);
+				}
+			},
+			function eachFinalCb(err) {
+				insertCb(null, stack.length > 1 ? stack : stack[0]);
+			}
+		);
+
+		function upsertItem(upsertItemCb, item, options) {
+			upsertBuilder({
+				item: item,
+				insertRules: options.enforceRules ? obj.insertRules : null,
+				updateRules: options.enforceRules ? obj.updateRules : null,
+				tableName: tableName
+			}, function(err, upsertInfo) {
+				query(upsertInfo.sql, upsertInfo.values, function queryCb(err, result) {
+					upsertItemCb(err, result);
+				});
+			});
+		}
 	}
 
 	function hilo() {
@@ -353,18 +293,53 @@ module.exports = function (conn) {
 	}
 
 	function disableKeyChecks(cb) {
-		query("SET unique_checks=0;", null, function (err, result) {
-			query("SET foreign_key_checks=0;", cb)
-		});
+		var sql = ["SET SESSION unique_checks=0;", "SET SESSION foreign_key_checks=0;"];
+		query(sql.join('\n'), null, cb);
 	}
 
 	function enableKeyChecks(cb) {
-		query("SET unique_checks=1;", null, function (err, result) {
-			query("SET foreign_key_checks=1;", cb)
+		var sql = ["SET SESSION unique_checks=1;", "SET SESSION foreign_key_checks=1;"];
+		query(sql.join('\n'), null, cb);
+	}
+
+	/**
+	 * TODO - fix transactions with connection pooling
+	 */
+	function startTransaction(cb) {
+		return cb(); //TODO
+		query("START TRANSACTION", function (err, res) {
+			if (err) {
+				openTransaction = false;
+				return cb(err);
+			}
+			openTransaction = true;
+			cb();
 		});
 	}
 
-	var obj = _.defaults({
+	function commit(cb) {
+		if (!openTransaction)
+			return cb(new Error('No transaction found to commit'));
+		return cb(); //TODO
+		query("COMMIT", function (err, res) {
+			if (err) return cb(err);
+			openTransaction = false;
+			cb();
+		});
+	}
+
+	function rollback(cb) {
+		return cb(); //TODO
+		if (!openTransaction)
+			return cb(new Error('No transaction found to rollback'));
+		query("ROLLBACK", function (err, res) {
+			if (err) return cb(err);
+			openTransaction = false;
+			cb();
+		});
+	}
+
+	var obj = {
 		defaultInsertMode: insertModes.hilo,
 		defaultKeyName: 'id',
 
@@ -372,6 +347,11 @@ module.exports = function (conn) {
 		updateRules: [],
 
 		query: function (sql, queryParams, cb) {
+			if(_.isFunction(queryParams) && !cb) {
+				cb = queryParams;
+				queryParams = null;
+			}
+			cb = cb || function() {};
 			query(sql, queryParams, cb);
 		},
 		queryOne: function (sql, queryParams, cb) {
@@ -383,16 +363,19 @@ module.exports = function (conn) {
 		update: update,
 		upsert: upsert,
 
-		startTransaction: transactions.startTransaction,
-		commit: transactions.commit,
-		rollback: transactions.rollback,
+		startTransaction: startTransaction,
+		commit: commit,
+		rollback: rollback,
 
 		disableKeyChecks: disableKeyChecks,
 		enableKeyChecks: enableKeyChecks,
 
-		disconnect: disconnect,
+		disconnect: function(cb) {
+			if(!pool) return cb();
+			pool.end(cb);
+		}, // for tests
 
 		logging: false
-	}, conn);
+	};
 	return obj;
 };
