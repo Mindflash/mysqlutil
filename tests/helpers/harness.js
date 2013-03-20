@@ -1,6 +1,6 @@
 "use strict";
-var mysqlUtil = require('../../.');
-var dateHelper = require('../../util/dateHelper.js');
+var mysqlUtil = require('../../');
+var dateHelper = require('../../lib/dateHelper.js');
 exports.db = null;
 
 exports.createTable = function(options, cb) {
@@ -17,19 +17,23 @@ exports.createTable = function(options, cb) {
 
 exports.connect = function(t) {
 	mysqlUtil.setup({
-		host: process.env.MYSQL_HOST || 'localhost',
+		host: process.env.MYSQL_HOST || 'vm',
 		user: process.env.MYSQL_USER || 'root',
 		password: process.env.MYSQL_PASSWORD || '',
 		database: process.env.MYSQL_DATABASE || 'mysqlutil_test'
 	}, function (err, session) {
 		exports.db = session;
-		exports.db.logging = true;
+		//exports.db.logging = true;
 		t.end();
 	});
-}
+};
 
 exports.dropTable = function(cb) {
 	exports.db.query('DROP TABLE IF EXISTS tmp;', cb);
+};
+
+exports.getItemsInTmpTable = function(cb) {
+	exports.db.query('SELECT * FROM tmp', [], cb);
 };
 
 exports.disconnect = function(t) {

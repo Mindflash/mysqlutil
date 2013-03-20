@@ -2,67 +2,27 @@
 var _ = require('underscore');
 var test = require('tap').test;
 var async = require('async');
-var insertModes = require('../util/insertModes.js');
+var insertModes = require('../lib/insertModes.js');
 var harness = require('./helpers/harness.js');
-var dateHelper = require('../util/dateHelper.js');
+var dateHelper = require('../lib/dateHelper.js');
 
 test("Connects to the database", harness.connect);
+test("Setup", harness.setupTmpTable);
 
-test('Setup', harness.setupTmpTable);
-
-test('a bulk insert using hilo works', function (t) {
-	var items = harness.generateTestItems(40001);
+test("an insert using hilo works", function (t) {
+	var items = harness.generateTestItems(5);
 
 	harness.db.insert('tmp', items, function (err, result) {
-		t.notOk(err, "no errors were thrown on bulk insert");
+		t.notOk(err, "no errors were thrown on insert, received: " + err);
 		t.equal(items.length, result.length, "all inserted items were returned");
 		t.end();
 	});
 });
 
-test('Teardown', harness.tearDown);
-test('Setup', harness.setupTmpTable);
+test("Teardown", harness.tearDown);
+test("Setup", harness.setupTmpTable);
 
-test('an insert using hilo works', function (t) {
-	var newItem = { created: new Date(), name: "This is a test" };
-
-	harness.db.insert('tmp', newItem, function (err, result) {
-		t.notOk(err, "no errors were thrown on insert, got: " + err);
-		t.end();
-	});
-});
-
-test('Teardown', harness.tearDown);
-test('Setup', harness.setupTmpTable);
-
-test('an insert supplied with a UTC date persists that date without altering it', function (t) {
-	var nowUtc = dateHelper.utcNow();
-	var newItem = {created: nowUtc, name: "This is a test"};
-	var newId = -1;
-
-	t.test('inserts row with UTC date', function(t) {
-		harness.db.insert('tmp', newItem, function (err, result) {
-			t.notOk(err, "no errors were thrown on insert, got: " + err);
-			t.ok(result.insertId, "insertId was passed back after insert");
-			newId = result.insertId;
-			t.end();
-		});
-	});
-
-	t.test('When selected, the row has the same UTC date', function(t) {
-		harness.db.queryOne('SELECT * FROM tmp WHERE id = ?', [newId], function (selectErr, selectResult) {
-			t.equal(Date.parse(selectResult.created.toString()), Date.parse(nowUtc.toString()), "utc date was inserted without alterations");
-			t.end();
-		});
-	});
-
-	t.end();
-});
-
-test('Teardown', harness.tearDown);
-test('Setup', harness.setupTmpTable);
-
-test('inserts are not written within transactions that have been rolled back', {skip: true}, function (t) {
+test("inserts are not written within transactions that have been rolled back", {skip: true}, function (t) {
 	var newItem = {created: new Date(), name: "This is a test"};
 
 	async.series([
@@ -92,24 +52,16 @@ test('inserts are not written within transactions that have been rolled back', {
 	});
 });
 
-test('Teardown', harness.tearDown);
-test('Setup', harness.setupTmpTable);
+test("Teardown", harness.tearDown);
+test("Setup", harness.setupTmpTable);
 
-test('an insert returns an insertId', function (t) {
-	harness.db.insert('tmp', {name: 'test ', created: new Date()}, function (err, result) {
-		t.ok(result.insertId, "insertId was passed back after insert");
-		t.end();
-	});
-});
-
-test('Teardown', harness.tearDown);
-test('Setup', harness.setupTmpTable);
-
-test('a bulk insert returns an insertId per inserted item', function (t) {
-	var items = harness.generateTestItems(1000);
+test("an insert returns an insertId per inserted item", function (t) {
+	var items = harness.generateTestItems(5);
 
 	var insertIdMissing = false;
 	harness.db.insert('tmp', items, function (err, results) {
+		t.notOk(err, "no errors were thrown on insert, received: " + err);
+		
 		_.each(results, function (result) {
 			if (!insertIdMissing && !result.insertId)
 				insertIdMissing = true;
@@ -119,6 +71,71 @@ test('a bulk insert returns an insertId per inserted item', function (t) {
 	});
 });
 
-test('Teardown', harness.tearDown);
+test("Teardown", harness.tearDown);
+test("Setup", harness.setupTmpTable);
+
+test("insert-ignore doesn't error on duplicate row inserts", function (t) {
+	var items = harness.generateTestItems(5);
+
+	async.series([
+		function(cb) {
+			harness.db.insert('tmp', items, cb, {insertMode: insertModes.custom});
+		},
+		function(cb) {
+			harness.db.insert('tmp', items, cb, {insertMode: insertModes.custom, ignore: true});
+		}
+	], function(err) {
+		t.notOk(err, "no errors were thrown on insert-ignore, received: " + err);
+		harness.getItemsInTmpTable(function(err,res) {
+			t.equal(res.length, items.length, "no additional rows were inserted.");
+			t.end();
+		});
+	});
+});
+
+test("Teardown", harness.tearDown);
+test("Setup", harness.setupTmpTable);
+
+test("upsert modifies values on key present", function (t) {
+	var items = harness.generateTestItems(5);
+	var namePostfix = 'test';
+
+	async.series([
+		function(cb) {
+			harness.db.insert('tmp', items, cb, {insertMode: insertModes.custom});
+		},
+		function(cb) {
+			var items2 = _.map(items, function(item) {
+				item.name += namePostfix;
+				return item;
+			});
+			harness.db.upsert('tmp', items, cb, {insertMode: insertModes.custom});
+		}
+	], function(err) {
+		t.notOk(err, "no errors were thrown on insert-ignore, received: " + err);
+		harness.getItemsInTmpTable(function(err,res) {
+			t.equal(res.length, items.length, "no additional rows were inserted.");
+
+			var unchangedRecord = _.find(res, function(rec){
+				return !~rec.name.indexOf(namePostfix);
+			});
+			t.notOk(unchangedRecord, "All records were updated");
+			t.end();
+		});
+	});
+});
+
+test("upsert inserts values if key not present", function (t) {
+	var items = harness.generateTestItems(5);
+
+	harness.db.upsert('tmp', items, function (err, results) {
+		t.notOk(err, "no errors were thrown on upsert, received: " + err);
+
+		harness.getItemsInTmpTable(function(err,res) {
+			t.equal(res.length, items.length, "All rows were inserted.");
+			t.end();
+		});
+	}, {insertMode: insertModes.custom});
+});
 
 test("Disconnects from the database", harness.disconnect);

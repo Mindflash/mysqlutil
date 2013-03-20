@@ -2,9 +2,9 @@
 var _ = require('underscore');
 var test = require('tap').test;
 var async = require('async');
-var insertModes = require('../util/insertModes.js');
+var insertModes = require('../lib/insertModes.js');
 var harness = require('./helpers/harness.js');
-var dateHelper = require('../util/dateHelper.js');
+var dateHelper = require('../lib/dateHelper.js');
 
 test("Connects to the database", harness.connect);
 

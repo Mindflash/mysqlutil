@@ -1,6 +1,6 @@
 var _ = require('underscore');
 var mysql = require('mysql');
-var session = require('./session');
+var session = require('./lib/session');
 
 exports.setup = function (settings, cb) {
 	console.log("mysqlutil setup");
@@ -10,6 +10,6 @@ exports.setup = function (settings, cb) {
 
 	cb(null, exports.session);
 };
-exports.insertModes = require('./util/insertModes.js');
-exports.utils = require('./util/dateHelper.js');
+exports.insertModes = require('./lib/insertModes.js');
+exports.utils = require('./lib/dateHelper.js');
 exports.session = {};
