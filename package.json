@@ -6,8 +6,10 @@
 	"repository": {
 		"url": "https://github.com/Mindflash/mysqlutil.git"
 	},
-	"keywords": ["mysql"],
-	"version": "0.1.2",
+	"keywords": [
+		"mysql"
+	],
+	"version": "0.1.3",
 	"bugs": {
 		"url": "https://github.com/Mindflash/mysqlutil/issues"
 	},
@@ -24,8 +26,9 @@
 	"main": "index.js",
 	"dependencies": {
 		"mysql": "git://github.com/felixge/node-mysql.git",
-		"lodash": "~1.0.1",
-		"async": "~0.2.5"
+		"lodash": "1.0.1",
+		"async": "0.2.5",
+		"dateformat": "1.0.6-1.2.3"
 	},
 	"devDependencies": {
 		"tap": "~0.4.0"
