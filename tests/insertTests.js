@@ -107,7 +107,7 @@ test("upsert inserts values if key not present", function (t) {
 });
 
 test("Truncates test table", harness.truncateTestTable);
-
+/*
 test("inserts are not written within transactions that have been rolled back", function (t) {
 	var newItem = {created: new Date(), name: "This is a test"};
 
@@ -137,7 +137,7 @@ test("inserts are not written within transactions that have been rolled back", f
 		t.end();
 	});
 });
-
+*/
 test("Drops test table", harness.dropTestTable);
 test("Drops Hilo table and proc", harness.dropHiLoTableAndProc);
 test("Disconnects from the database", harness.disconnect);
