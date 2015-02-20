@@ -34,7 +34,7 @@ test('Constructs a simple bulk upsert', function (t) {
 	var expectedValues = [_(items.concat()).map(function(item) {
 		return _.values(item);
 	}).value()];
-	var expectedSQL = 'INSERT INTO test (id, name, color) VALUES ? ON DUPLICATE KEY UPDATE '+
+	var expectedSQL = 'INSERT INTO test (id, name, color) VALUES ? ON DUPLICATE KEY UPDATE id = VALUES(id), '+
 		'name = VALUES(name), color = VALUES(color)';
 
 	bulkInsertBuilder({
@@ -117,7 +117,7 @@ test('Constructs a simple bulk upsert with rules', function (t) {
 		values.push("fun")
 		return values;
 	}).value()];
-	var expectedSQL = 'INSERT INTO test (id, name, color, modified, fun) VALUES ? ON DUPLICATE KEY UPDATE '+
+	var expectedSQL = 'INSERT INTO test (id, name, color, modified, fun) VALUES ? ON DUPLICATE KEY UPDATE id = VALUES(id), '+
 		'name = VALUES(name), color = VALUES(color), modified = VALUES(modified), fun = VALUES(fun)';
 
 	var insertRules = [function(_items, tableName) {
