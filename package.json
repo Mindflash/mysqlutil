@@ -1,41 +1,41 @@
 {
-	"author": "Mindflash <npmjs@mindflash.com>",
-	"name": "mysqlutil",
-	"description": "A nice, simple, node-mysql wrapper",
-	"homepage": "https://github.com/Mindflash/mysqlutil",
-	"repository": {
-		"url": "https://github.com/Mindflash/mysqlutil.git"
-	},
-	"keywords": [
-		"mysql"
-	],
-	"version": "0.1.26",
-	"bugs": {
-		"url": "https://github.com/Mindflash/mysqlutil/issues"
-	},
-	"contributors": [
-		"Matt Smith",
-		"Max Nachlinger",
-		"Alexander Shakov"
-	],
-	"licenses": {
-		"type": "MIT"
-	},
-	"scripts": {
-		"test": "tape tests/*.js"
-	},
-	"main": "index.js",
-	"dependencies": {
-		"dateformat": "^1.0.7-1.2.3",
-		"async": "^0.9.0",
-		"lodash": "^2.4.1",
-		"mysql": "^2.5.4"
-	},
-	"optionalDependencies": {},
-	"engines": {
-		"node": "*"
-	},
-	"devDependencies": {
-		"tape": "^3.0.3"
-	}
+  "author": "Mindflash <npmjs@mindflash.com>",
+  "name": "mysqlutil",
+  "description": "A nice, simple, node-mysql wrapper",
+  "homepage": "https://github.com/Mindflash/mysqlutil",
+  "repository": {
+    "url": "https://github.com/Mindflash/mysqlutil.git"
+  },
+  "keywords": [
+    "mysql"
+  ],
+  "version": "0.1.27",
+  "bugs": {
+    "url": "https://github.com/Mindflash/mysqlutil/issues"
+  },
+  "contributors": [
+    "Matt Smith",
+    "Max Nachlinger",
+    "Alexander Shakov"
+  ],
+  "licenses": {
+    "type": "MIT"
+  },
+  "scripts": {
+    "test": "tape tests/*.js"
+  },
+  "main": "index.js",
+  "dependencies": {
+    "dateformat": "^1.0.7-1.2.3",
+    "async": "^0.9.0",
+    "lodash": "^2.4.1",
+    "mysql": "^2.5.4"
+  },
+  "optionalDependencies": {},
+  "engines": {
+    "node": "*"
+  },
+  "devDependencies": {
+    "tape": "^3.0.3"
+  }
 }
